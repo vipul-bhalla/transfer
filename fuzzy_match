@@ -1,0 +1,45 @@
+import pandas as pd
+from fuzzywuzzy import fuzz
+
+# Example DataFrames
+df1 = pd.DataFrame({
+    'filename': ['file1.txt', 'file1.txt', 'file2.txt', 'file2.txt'],
+    'sentence': ['This is a sentence.', 'Another sentence.', 'Yet another sentence.', 'Last sentence.']
+})
+
+df2 = pd.DataFrame({
+    'filename': ['file1.txt', 'file1.txt', 'file2.txt', 'file2.txt'],
+    'sentence': ['This is a sentence!', 'A different sentence.', 'Yet another sentence.', 'The last sentence.']
+})
+
+# Define a threshold for fuzzy matching
+threshold = 80
+
+# Function to compute unmatched percentage
+def compute_unmatched_percentage(df1, df2, threshold=80):
+    unmatched_percentages = []
+
+    # Group by filename and compare sentences for each file
+    for filename in df1['filename'].unique():
+        df1_sentences = df1[df1['filename'] == filename]['sentence'].tolist()
+        df2_sentences = df2[df2['filename'] == filename]['sentence'].tolist()
+
+        unmatched_count = 0
+        total_sentences = len(df1_sentences)
+
+        for sent1 in df1_sentences:
+            matched = any(fuzz.ratio(sent1, sent2) >= threshold for sent2 in df2_sentences)
+            if not matched:
+                unmatched_count += 1
+
+        unmatched_percentage = (unmatched_count / total_sentences) * 100
+        unmatched_percentages.append({
+            'filename': filename,
+            'unmatched_percentage': unmatched_percentage
+        })
+
+    return pd.DataFrame(unmatched_percentages)
+
+# Compute the unmatched percentages
+result_df = compute_unmatched_percentage(df1, df2, threshold)
+print(result_df)
