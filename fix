@@ -1,0 +1,64 @@
+The code you shared initially should largely remain unchanged after updating the BigQuery data with a defined schema. However, there are a few minor adjustments you might need to make to ensure that the code correctly handles the updated data. Here’s a detailed breakdown:
+
+Key Considerations:
+Column Names: Ensure that the code uses the correct column names in SQL queries and when processing query results.
+Data Handling: Verify that the data is being handled correctly in the function, especially when retrieving and processing results from BigQuery.
+Changes to the Existing Code:
+Update SQL Query Construction:
+
+If your queries were previously relying on the default column names like f0_, f1_, etc., you need to update them to use the newly defined schema's column names.
+For example, if your CSV previously had unnamed columns and you’ve now named them order_id, product_name, etc., update the queries accordingly.
+python
+Copy code
+# Example update in your `sql_query_func`
+sql_query_func = FunctionDeclaration(
+    name="sql_query",
+    description="Get information from data in BigQuery using SQL queries",
+    parameters={
+        "type": "object",
+        "properties": {
+            "query": {"type": "string", "description": "SQL query on a single line that will help give quantitative answers to the user's question when run on a BigQuery dataset and table. In the SQL query, always use the fully qualified dataset and table names."}
+        },
+        "required": ["query"],
+    },
+)
+In the handle_user_prompt function, ensure that queries use the correct column names:
+python
+Copy code
+if response.function_call.name == "sql_query":
+    cleaned_query = params["query"].replace("\\n", " ").replace("\n", "").replace("\\", "")
+    query_job = client.query(cleaned_query, job_config=job_config)
+    api_response = query_job.result()
+    print("sql query func:", api_response)
+    api_response = str([dict(row) for row in api_response])
+    api_response = api_response.replace("\\", "").replace("\n", "")
+    api_requests_and_responses.append([response.function_call.name, params, api_response])
+Result Handling:
+
+When processing the api_response after a SQL query, ensure that the code correctly accesses the data using the new column names.
+For example, if you are retrieving order_id, ensure that your code is accessing row["order_id"] and not row["f0_"].
+python
+Copy code
+if response.function_call.name == "sql_query":
+    job_config = bigquery.QueryJobConfig(maximum_bytes_billed=100000000)
+    try:
+        cleaned_query = params["query"].replace("\\n", " ").replace("\n", "").replace("\\", "")
+        query_job = client.query(cleaned_query, job_config=job_config)
+        api_response = query_job.result()
+
+        # Ensure correct access to the columns
+        api_response = str([{"order_id": row["order_id"], "quantity": row["quantity"]} for row in api_response])
+
+        print("sql query func:", api_response)
+        api_response = api_response.replace("\\", "").replace("\n", "")
+        api_requests_and_responses.append([response.function_call.name, params, api_response])
+    except Exception as e:
+        api_response = f"{str(e)}"
+        api_requests_and_responses.append([response.function_call.name, params, api_response])
+Testing:
+
+Test the entire flow after these changes to ensure that the prompts are being handled correctly, and the data returned from BigQuery is as expected.
+Summary:
+The main structure of the handle_user_prompt function remains unchanged.
+Ensure that any SQL queries and result handling in the code are updated to reflect the new column names and data types defined in your updated BigQuery schema.
+Thoroughly test the code to confirm that it handles the data correctly without any errors.
