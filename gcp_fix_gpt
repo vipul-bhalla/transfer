@@ -1,0 +1,79 @@
+def handle_user_prompt(prompt):
+    chat = model.start_chat()
+
+    # Append instructions to the user prompt
+    prompt += """
+    Please give a concise, high-level summary followed by detail in
+    plain language about where the information in your response is
+    coming from in the database. Only use information that you learn
+    from BigQuery, do not make up information.
+    """
+
+    response = chat.send_message(prompt)
+    if response.candidates[0].content.parts[0].function_call is None:
+        # If the desired response is already generated, return it immediately.
+        return response.candidates[0].content.parts[0].text, "No further function calls needed."
+
+    # Proceed with function call processing as needed
+    api_requests_and_responses = []
+    backend_details = ""
+    function_calling_in_process = True
+    while function_calling_in_process:
+        try:
+            params = {}
+            for key, value in response.function_call.args.items():
+                params[key] = value
+
+            if response.function_call.name == "list_datasets":
+                # Use the known public dataset
+                api_response = [BIGQUERY_DATASET_ID]
+                api_requests_and_responses.append([response.function_call.name, params, api_response])
+
+            if response.function_call.name == "list_tables":
+                dataset_id = f"{BIGQUERY_PROJECT_ID}.{params['dataset_id']}"
+                api_response = client.list_tables(dataset_id)
+                api_response = str([table.table_id for table in api_response])
+                api_requests_and_responses.append([response.function_call.name, params, api_response])
+
+            if response.function_call.name == "get_table":
+                table_id = f"{BIGQUERY_PROJECT_ID}.{params['table_id']}"
+                api_response = client.get_table(table_id)
+                api_response = api_response.to_api_repr()
+                api_requests_and_responses.append([
+                    response.function_call.name,
+                    params,
+                    [str(api_response.get("description", "")), str([column["name"] for column in api_response["schema"]["fields"]])]
+                ])
+                api_response = str(api_response)
+
+            if response.function_call.name == "sql_query":
+                job_config = bigquery.QueryJobConfig(maximum_bytes_billed=100000000)
+                try:
+                    cleaned_query = params["query"].replace("\\n", " ").replace("\n", "").replace("\\", "")
+                    query_job = client.query(cleaned_query, job_config=job_config)
+                    api_response = query_job.result()
+                    api_response = str([dict(row) for row in api_response])
+                    api_response = api_response.replace("\\", "").replace("\n", "")
+                    api_requests_and_responses.append([response.function_call.name, params, api_response])
+                except Exception as e:
+                    api_response = f"{str(e)}"
+                    api_requests_and_responses.append([response.function_call.name, params, api_response])
+
+            response = chat.send_message(
+                Part.from_function_response(
+                    name=response.function_call.name,
+                    response={"content": api_response},
+                ),
+            )
+            response = response.candidates[0].content.parts[0]
+
+            backend_details += f"- Function call:\n   - Function name: `{api_requests_and_responses[-1][0]}`\n"
+            backend_details += f"   - Function parameters: `{api_requests_and_responses[-1][1]}`\n"
+            backend_details += f"   - API response: `{api_requests_and_responses[-1][2]}`\n\n"
+
+        except AttributeError:
+            function_calling_in_process = False
+
+    full_response = response.text
+
+    return full_response, backend_details
