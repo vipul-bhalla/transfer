@@ -1,0 +1,155 @@
+import time
+from google.cloud import bigquery
+from google.oauth2 import service_account
+from vertexai.generative_models import FunctionDeclaration, GenerativeModel, Part, Tool
+
+# Path to your service account key file
+SERVICE_ACCOUNT_JSON = 'gcp_demo_service_key.json'
+BIGQUERY_PROJECT_ID = "balmy-curve-429612-u2"
+BIGQUERY_DATASET_ID = "gcp_fdts"
+client = bigquery.Client(project=BIGQUERY_PROJECT_ID)
+
+# Function declarations remain the same
+list_datasets_func = FunctionDeclaration(
+    name="list_datasets",
+    description="Get a list of datasets that will help answer the user's question",
+    parameters={"type": "object", "properties": {}},
+)
+list_tables_func = FunctionDeclaration(
+    name="list_tables",
+    description="List tables in a dataset that will help answer the user's question",
+    parameters={
+        "type": "object",
+        "properties": {
+            "dataset_id": {"type": "string", "description": "Dataset ID to fetch tables from."}
+        },
+        "required": ["dataset_id"],
+    },
+)
+get_table_func = FunctionDeclaration(
+    name="get_table",
+    description="Get information about a table, including the description, schema, and number of rows that will help answer the user's question. Always use the fully qualified dataset and table names.",
+    parameters={
+        "type": "object",
+        "properties": {
+            "table_id": {"type": "string", "description": "Fully qualified ID of the table to get information about"}
+        },
+        "required": ["table_id"],
+    },
+)
+
+sql_query_func = FunctionDeclaration(
+    name="sql_query",
+    description="Get information from data in BigQuery using SQL queries",
+    parameters={
+        "type": "object",
+        "properties": {
+            "query": {"type": "string", "description": "SQL query on a single line that will help give quantitative answers to the user's question when run on a BigQuery dataset and table. In the SQL query, always use the fully qualified dataset and table names."}
+        },
+        "required": ["query"],
+    },
+)
+sql_query_tool = Tool(
+    function_declarations=[list_datasets_func, list_tables_func, get_table_func, sql_query_func]
+)
+model = GenerativeModel(
+    "gemini-1.5-pro-001",
+    generation_config={"temperature": 0},
+    tools=[sql_query_tool],
+)
+
+# Initialize persistent chat outside the function
+chat = model.start_chat()
+
+# Function to Handle User Prompt and Display Response (Modified for interactivity)
+def handle_user_prompt(prompt, chat):
+    # Append instructions to the user prompt
+    prompt += """
+    Please give a concise, high-level summary followed by detail in
+    plain language about where the information in your response is
+    coming from in the database. Only use information that you learn
+    from BigQuery, do not make up information.
+    """
+
+    response = chat.send_message(prompt)
+    response = response.candidates[0].content.parts[0]
+
+    api_requests_and_responses = []
+    backend_details = ""
+
+    function_calling_in_process = True
+    while function_calling_in_process:
+        try:
+            params = {}
+            for key, value in response.function_call.args.items():
+                params[key] = value
+
+            if response.function_call.name == "list_datasets":
+                # Use the known public dataset
+                api_response = [BIGQUERY_DATASET_ID]
+                api_requests_and_responses.append([response.function_call.name, params, api_response])
+
+            if response.function_call.name == "list_tables":
+                dataset_id = f"{BIGQUERY_PROJECT_ID}.{params['dataset_id']}"
+                api_response = client.list_tables(dataset_id)
+                api_response = str([table.table_id for table in api_response])
+                api_requests_and_responses.append([response.function_call.name, params, api_response])
+
+            if response.function_call.name == "get_table":
+                table_id = f"{BIGQUERY_PROJECT_ID}.{params['table_id']}"
+                api_response = client.get_table(table_id)
+                api_response = api_response.to_api_repr()
+                api_requests_and_responses.append([
+                    response.function_call.name,
+                    params,
+                    [str(api_response.get("description", "")), str([column["name"] for column in api_response["schema"]["fields"]])]
+                ])
+                api_response = str(api_response)
+
+            if response.function_call.name == "sql_query":
+                job_config = bigquery.QueryJobConfig(maximum_bytes_billed=100000000)
+                try:
+                    cleaned_query = params["query"].replace("\\n", " ").replace("\n", "").replace("\\", "")
+                    query_job = client.query(cleaned_query, job_config=job_config)
+                    api_response = query_job.result()
+                    api_response = str([dict(row) for row in api_response])
+                    api_response = api_response.replace("\\", "").replace("\n", "")
+                    api_requests_and_responses.append([response.function_call.name, params, api_response])
+                except Exception as e:
+                    api_response = f"{str(e)}"
+                    api_requests_and_responses.append([response.function_call.name, params, api_response])
+
+            response = chat.send_message(
+                Part.from_function_response(
+                    name=response.function_call.name,
+                    response={"content": api_response},
+                ),
+            )
+            response = response.candidates[0].content.parts[0]
+
+            backend_details += f"- Function call:\n   - Function name: `{api_requests_and_responses[-1][0]}`\n"
+            backend_details += f"   - Function parameters: `{api_requests_and_responses[-1][1]}`\n"
+            backend_details += f"   - API response: `{api_requests_and_responses[-1][2]}`\n\n"
+
+        except AttributeError:
+            function_calling_in_process = False
+
+    full_response = response.text
+
+    return full_response, backend_details
+
+# Interactive loop to allow user to ask multiple questions
+def interactive_chat():
+    global chat  # Make chat object persistent between calls
+    while True:
+        prompt = input("Ask your question (or type 'exit' to quit): ")
+        if prompt.lower() == 'exit':
+            break
+        full_response, backend_details = handle_user_prompt(prompt, chat)
+        print("\nResponse:")
+        print(full_response)
+        print("\nFunction calls, parameters, and responses:")
+        print(backend_details)
+
+# Start interactive chat session
+interactive_chat()
