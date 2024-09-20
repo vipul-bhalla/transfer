@@ -1,0 +1,144 @@
+import time
+from google.cloud import bigquery
+from google.oauth2 import service_account
+from vertexai.generative_models import FunctionDeclaration, GenerativeModel, Part, Tool
+
+# Path to your service account key file
+SERVICE_ACCOUNT_JSON = 'gcp_demo_service_key.json'
+BIGQUERY_PROJECT_ID = "balmy-curve-429612-u2"
+BIGQUERY_DATASET_ID = "gcp_fdts"
+
+# Initialize the BigQuery client
+client = bigquery.Client(project=BIGQUERY_PROJECT_ID)
+
+# Function declarations for dataset and table discovery
+list_datasets_func = FunctionDeclaration(
+    name="list_datasets",
+    description="Get a list of datasets that will help answer the user's question",
+    parameters={"type": "object", "properties": {}},
+)
+
+list_tables_func = FunctionDeclaration(
+    name="list_tables",
+    description="List tables in a dataset that will help answer the user's question",
+    parameters={
+        "type": "object",
+        "properties": {
+            "dataset_id": {"type": "string", "description": "Dataset ID to fetch tables from."}
+        },
+        "required": ["dataset_id"],
+    },
+)
+
+get_table_func = FunctionDeclaration(
+    name="get_table",
+    description="Get information about a table, including the description, schema, and number of rows that will help answer the user's question. Always use the fully qualified dataset and table names.",
+    parameters={
+        "type": "object",
+        "properties": {
+            "table_id": {"type": "string", "description": "Fully qualified ID of the table to get information about"}
+        },
+        "required": ["table_id"],
+    },
+)
+
+sql_query_func = FunctionDeclaration(
+    name="sql_query",
+    description="Get information from data in BigQuery using SQL queries",
+    parameters={
+        "type": "object",
+        "properties": {
+            "query": {"type": "string", "description": "SQL query on a single line that will help give quantitative answers to the user's question when run on a BigQuery dataset and table. In the SQL query, always use the fully qualified dataset and table names."}
+        },
+        "required": ["query"],
+    },
+)
+
+sql_query_tool = Tool(
+    function_declarations=[list_datasets_func, list_tables_func, get_table_func, sql_query_func]
+)
+
+model = GenerativeModel(
+    "gemini-1.5-pro-001",
+    generation_config={"temperature": 0},
+    tools=[sql_query_tool],
+)
+
+# Step 1: Get list of datasets and tables dynamically
+def initialize_dataset_and_table(chat):
+    # Start the chat with Gemini model
+    discovery_prompt = "Please list all datasets available in BigQuery."
+    
+    # Get the datasets
+    response = chat.send_message(discovery_prompt)
+    datasets = response.candidates[0].content.parts[0].function_call.args
+    
+    # Pick the first dataset for simplicity or based on user's preference
+    dataset_id = datasets[0]  # Assuming the first dataset is the relevant one
+    
+    # Get tables from the discovered dataset
+    list_tables_prompt = f"Please list all tables in the dataset `{dataset_id}`."
+    response = chat.send_message(list_tables_prompt)
+    tables = response.candidates[0].content.parts[0].function_call.args
+    
+    # Pick the first table or let user choose
+    table_id = tables[0]
+    
+    # Get table schema
+    get_table_schema_prompt = f"Please provide schema details for the table `{table_id}`."
+    response = chat.send_message(get_table_schema_prompt)
+    
+    # Extract schema details (columns, descriptions, etc.)
+    schema_details = response.candidates[0].content.parts[0].function_call.args
+    
+    return {
+        "dataset_id": dataset_id,
+        "table_id": table_id,
+        "schema": schema_details
+    }
+
+# Step 2: Build the dynamic prompt after dataset and table discovery
+def handle_user_prompt(prompt, chat):
+    # Perform initial discovery
+    metadata = initialize_dataset_and_table(chat)
+    
+    # Extract discovered dataset and table details
+    dataset_id = metadata['dataset_id']
+    table_id = metadata['table_id']
+    schema_details = metadata['schema']
+    
+    # Build a schema summary for the prompt
+    column_summary = "\n".join([f"- {col['name']}: {col['description'][:50]} (type: {col['type']})"
+                                for col in schema_details])
+    
+    # Construct the full prompt dynamically
+    full_prompt = f"""
+    You are an expert financial analyst with experience in transaction data.
+    You are working with the `{table_id}` table in the `{dataset_id}` dataset, which contains the following columns:
+
+    {column_summary}
+    
+    Please analyze the user's question: "{prompt}"
+    
+    If the query is unclear or ambiguous, ask for clarification. Use partial matches and case-insensitive comparisons 
+    when identifying relevant columns based on the user's input. Provide a concise response.
+    """
+    
+    # Send the constructed prompt to Gemini
+    response = chat.send_message(full_prompt)
+    return response.candidates[0].content.text
+
+# Step 3: Start the interactive chat session
+def interactive_chat():
+    chat = model.start_chat()
+    
+    while True:
+        user_prompt = input("Ask your question (or type 'exit' to quit): ")
+        if user_prompt.lower() == 'exit':
+            break
+        response = handle_user_prompt(user_prompt, chat)
+        print("\nResponse:")
+        print(response)
+
+# Run the interactive chat session
+interactive_chat()
