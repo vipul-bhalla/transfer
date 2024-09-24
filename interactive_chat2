@@ -1,0 +1,115 @@
+def handle_user_prompt(prompt, chat):
+    api_requests_and_responses = []
+    function_calling_in_process = True
+    
+    # Initialize variables to hold discovered information
+    dataset_id = None
+    table_id = None
+    column_metadata = None
+    
+    # Debugging helper
+    def debug_print(stage, var):
+        print(f"{stage}: {var}")
+    
+    # Start the function call loop
+    while function_calling_in_process:
+        try:
+            params = {}
+            # Extract function call arguments
+            for key, value in response.function_call.args.items():
+                params[key] = value
+
+            # Handle the list_datasets function call to retrieve the dataset ID
+            if response.function_call.name == "list_datasets":
+                api_response = [BIGQUERY_DATASET_ID]  # Use the available dataset ID
+                dataset_id = api_response[0]  # Capture the first dataset ID
+                debug_print("Dataset ID found", dataset_id)  # Debugging output
+                api_requests_and_responses.append([response.function_call.name, params, api_response])
+
+            # Handle the list_tables function call to retrieve the table ID
+            elif response.function_call.name == "list_tables":
+                dataset_id = f"{BIGQUERY_PROJECT_ID}.{params['dataset_id']}"
+                api_response = client.list_tables(dataset_id)
+                table_list = [table.table_id for table in api_response]
+                debug_print("Table List", table_list)  # Debugging output
+
+                if table_list:
+                    table_id = table_list[0]  # Capture the first table ID
+                    debug_print("Table ID found", table_id)  # Debugging output
+                else:
+                    debug_print("Table ID missing", None)
+                
+                api_requests_and_responses.append([response.function_call.name, params, table_list])
+
+            # Handle the get_table function call to retrieve the table schema
+            elif response.function_call.name == "get_table":
+                table_id = f"{BIGQUERY_PROJECT_ID}.{params['table_id']}"
+                api_response = client.get_table(table_id)
+                table_info = api_response.to_api_repr()
+                debug_print("Table Info", table_info)  # Debugging output
+
+                # Extract schema information from the table metadata
+                column_metadata = [
+                    {"name": field["name"], "description": field.get("description", "No description"), "type": field["type"]}
+                    for field in table_info["schema"]["fields"]
+                ]
+                debug_print("Column Metadata", column_metadata)  # Debugging output
+
+                api_requests_and_responses.append([
+                    response.function_call.name,
+                    params,
+                    [str(table_info.get("description", "")), str([column["name"] for column in table_info["schema"]["fields"]])]
+                ])
+                api_response = str(api_response)
+
+            # Handle the SQL query function call (if table info has been retrieved)
+            elif response.function_call.name == "sql_query":
+                job_config = bigquery.QueryJobConfig(maximum_bytes_billed=100000000)
+                try:
+                    cleaned_query = params["query"].replace("\\n", " ").replace("\n", "").replace("\\", "")
+                    query_job = client.query(cleaned_query, job_config=job_config)
+                    api_response = query_job.result()
+                    api_response = str([dict(row) for row in api_response])
+                    api_response = api_response.replace("\\", "").replace("\n", "")
+                    api_requests_and_responses.append([response.function_call.name, params, api_response])
+                except Exception as e:
+                    api_response = f"{str(e)}"
+                    api_requests_and_responses.append([response.function_call.name, params, api_response])
+
+            # Process the function response and continue
+            response = chat.send_message(
+                Part.from_function_response(
+                    name=response.function_call.name,
+                    response={"content": api_response},
+                ),
+            )
+            response = response.candidates[0].content.parts[0]
+
+        except AttributeError:
+            function_calling_in_process = False
+    
+    # Check if both dataset and table metadata were discovered
+    if dataset_id and table_id and column_metadata:
+        column_summary = "\n".join([f"- {col['name']}: {col['description'][:50]} (type: {col['type']})"
+                                    for col in column_metadata])
+        
+        # Construct the full prompt dynamically with the retrieved schema information
+        full_prompt = f"""
+        You are an expert financial analyst with extensive experience in analyzing transaction data for banks.
+        You are working with the `{table_id}` table in the `{dataset_id}` dataset, which contains the following columns:
+        
+        {column_summary}
+        
+        Please analyze the user's question: "{prompt}"
+        
+        If the query is unclear or ambiguous, ask for clarification. Use partial matches and case-insensitive comparisons 
+        when identifying relevant columns based on the user's input. Provide a concise response in plain language.
+        """
+        
+        # Send the final prompt to Gemini
+        final_response = chat.send_message(full_prompt)
+        return final_response.candidates[0].content.text, api_requests_and_responses
+    else:
+        # Handle the case where metadata isn't fully discovered
+        debug_print("Error", "Dataset or table information not discovered properly")
+        return "Dataset or table information not discovered properly.", api_requests_and_responses
