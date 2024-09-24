@@ -1,0 +1,94 @@
+def handle_user_prompt(prompt, chat):
+    api_requests_and_responses = []
+    backend_details = ""
+
+    # Flags to ensure all necessary information is gathered
+    dataset_discovered = False
+    tables_discovered = False
+    schema_discovered = False
+
+    function_calling_in_process = True
+    response = None  # Initialize response variable
+
+    while function_calling_in_process:
+        try:
+            # Check if we have a valid response to process
+            if response and hasattr(response, 'function_call'):
+                params = {}
+                for key, value in response.function_call.args.items():
+                    params[key] = value
+
+                # Check if the dataset is discovered
+                if response.function_call.name == "list_datasets":
+                    api_response = [BIGQUERY_DATASET_ID]
+                    dataset_discovered = True
+                    api_requests_and_responses.append([response.function_call.name, params, api_response])
+
+                # Check if the tables are discovered within the dataset
+                if dataset_discovered and response.function_call.name == "list_tables":
+                    dataset_id = f"{BIGQUERY_PROJECT_ID}.{params['dataset_id']}"
+                    api_response = client.list_tables(dataset_id)
+                    api_response = str([table.table_id for table in api_response])
+                    tables_discovered = True
+                    api_requests_and_responses.append([response.function_call.name, params, api_response])
+
+                # Get table schema if tables are discovered
+                if tables_discovered and response.function_call.name == "get_table":
+                    table_id = f"{BIGQUERY_PROJECT_ID}.{params['table_id']}"
+                    api_response = client.get_table(table_id)
+                    api_response = api_response.to_api_repr()
+                    schema_discovered = True
+                    api_requests_and_responses.append([
+                        response.function_call.name,
+                        params,
+                        [str(api_response.get("description", "")), str([column["name"] for column in api_response["schema"]["fields"]])]
+                    ])
+
+            # Ensure all steps are completed before proceeding
+            if dataset_discovered and tables_discovered and schema_discovered:
+                # Construct the prompt with the gathered metadata
+                table_metadata = api_requests_and_responses[-1][2][1]  # Extract column metadata
+                full_prompt = f"""
+                You are an expert financial analyst with extensive experience in analyzing transaction data for banks.
+                You are interacting with a dataset that tracks banking transactions. The relevant table in the dataset is `transactions`. 
+                Below is a description of the columns in the dataset:
+
+                {table_metadata}
+
+                Please analyze the user's question: "{prompt}"
+
+                Your task is to:
+                - Automatically select the appropriate table (`transactions`) and columns based on the column descriptions provided above.
+                - Use case-insensitive and partial matches when identifying which column names match the user's query.
+                - If multiple columns could match the query, ask the user to clarify.
+                - If the query is ambiguous or unclear, ask clarifying questions instead of assuming the intent.
+                - If specific columns (like amounts, dates, transaction types, etc.) are needed, select them based on the user query and your understanding of the column descriptions.
+                - Do not return SQL code to the user. Instead, provide a plain language explanation based on the results of the query.
+                - Only use information retrieved from the `transactions` table. Do not invent information.
+
+                Based on these instructions, please answer the user's query.
+                """
+                # Now, send the full prompt with metadata
+                response = chat.send_message(full_prompt)
+                function_calling_in_process = False  # End the loop as we have sent the prompt
+
+            # If any step is not completed, trigger the corresponding function call
+            if not dataset_discovered:
+                response = chat.send_message("Please retrieve dataset information.")
+            elif not tables_discovered:
+                response = chat.send_message("Please retrieve table information.")
+            elif not schema_discovered:
+                response = chat.send_message("Please retrieve table schema information.")
+
+        except AttributeError:
+            function_calling_in_process = False
+
+    # Final response after all function calls are completed
+    full_response = response.text if response else "No response generated."
+
+    # Logging the backend details for debugging or tracing
+    backend_details += f"- Function call sequence:\n"
+    for req in api_requests_and_responses:
+        backend_details += f"   - Function name: `{req[0]}` with params: `{req[1]}` returned: `{req[2]}`\n"
+
+    return full_response, backend_details
