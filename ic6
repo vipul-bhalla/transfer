@@ -1,0 +1,104 @@
+def handle_user_prompt(prompt, chat):
+    api_requests_and_responses = []
+    backend_details = ""
+
+    # Step flags to ensure all necessary information is gathered in sequence
+    dataset_discovered = False
+    tables_discovered = False
+    schema_discovered = False
+    table_metadata = ""
+
+    # This loop will be executed until the prompt is fully processed
+    function_calling_in_process = True
+    response = None  # Initialize response variable
+
+    while function_calling_in_process:
+        try:
+            # Retrieve datasets (first step)
+            if not dataset_discovered:
+                # Trigger the function to get dataset information
+                response = chat.send_message("Please retrieve dataset information.")
+                if response and hasattr(response, 'function_call') and response.function_call.name == "list_datasets":
+                    api_response = [BIGQUERY_DATASET_ID]
+                    dataset_discovered = True
+                    api_requests_and_responses.append([response.function_call.name, {}, api_response])
+
+            # Retrieve tables once the dataset is discovered
+            if dataset_discovered and not tables_discovered:
+                response = chat.send_message("Please retrieve table information.")
+                if response and hasattr(response, 'function_call') and response.function_call.name == "list_tables":
+                    dataset_id = f"{BIGQUERY_PROJECT_ID}.{BIGQUERY_DATASET_ID}"
+                    api_response = client.list_tables(dataset_id)
+                    api_response = [table.table_id for table in api_response]
+                    tables_discovered = True
+                    api_requests_and_responses.append([response.function_call.name, {}, api_response])
+
+            # Retrieve schema information once tables are discovered
+            if tables_discovered and not schema_discovered:
+                response = chat.send_message("Please retrieve table schema information.")
+                if response and hasattr(response, 'function_call') and response.function_call.name == "get_table":
+                    table_id = f"{BIGQUERY_PROJECT_ID}.{BIGQUERY_DATASET_ID}.transactions"
+                    api_response = client.get_table(table_id)
+                    api_response = api_response.to_api_repr()
+                    schema_discovered = True
+                    table_metadata = str([column["name"] for column in api_response["schema"]["fields"]])
+                    api_requests_and_responses.append([response.function_call.name, {}, table_metadata])
+
+            # Ensure all metadata has been gathered before generating SQL
+            if dataset_discovered and tables_discovered and schema_discovered:
+                # Now, construct the final prompt with table schema included
+                full_prompt = f"""
+                You are an expert financial analyst with extensive experience in analyzing transaction data for banks.
+                You are interacting with a dataset that tracks banking transactions. The relevant table in the dataset is `transactions`.
+                Below is a description of the columns in the dataset:
+                
+                {table_metadata}
+                
+                Please analyze the user's question: "{prompt}"
+                
+                Your task is to:
+                - Automatically select the appropriate table (`transactions`) and columns based on the column descriptions provided above.
+                - Use case-insensitive and partial matches when identifying which column names match the user's query.
+                - If multiple columns could match the query, ask the user to clarify.
+                - If the query is ambiguous or unclear, ask clarifying questions instead of assuming the intent.
+                - If specific columns (like amounts, dates, transaction types, etc.) are needed, select them based on the user query and your understanding of the column descriptions.
+                - Do not return SQL code to the user. Instead, provide a plain language explanation based on the results of the query.
+                - Only use information retrieved from the `transactions` table. Do not invent information.
+                
+                Based on these instructions, please answer the user's query.
+                """
+                
+                # Now, send the final prompt to the model
+                response = chat.send_message(full_prompt)
+                function_calling_in_process = False  # End the loop as we have sent the prompt
+
+        except AttributeError:
+            function_calling_in_process = False  # Stop the loop if there is an issue in function calling
+
+    # After metadata is gathered, now execute the SQL query based on user input
+    if response and hasattr(response, 'function_call'):
+        if response.function_call.name == "sql_query":
+            job_config = bigquery.QueryJobConfig(maximum_bytes_billed=100000000)
+            cleaned_query = prompt.replace("\\n", " ").replace("\n", "").replace("\\", "")
+            try:
+                query_job = client.query(cleaned_query, job_config=job_config)
+                api_response = query_job.result()
+                api_response = str([dict(row) for row in api_response])
+                api_response = api_response.replace("\\", "").replace("\n", "")
+                api_requests_and_responses.append([response.function_call.name, {}, api_response])
+            except Exception as e:
+                api_response = f"SQL Execution Error: {str(e)}"
+                api_requests_and_responses.append([response.function_call.name, {}, api_response])
+
+            # Log the SQL query execution details
+            backend_details += f"- SQL Query Execution:\n   - Query: `{cleaned_query}`\n   - Result: `{api_response}`\n"
+
+    # Final response after all function calls are completed
+    full_response = response.text if response else "No response generated."
+
+    # Logging the backend details for debugging or tracing
+    backend_details += f"- Function call sequence:\n"
+    for req in api_requests_and_responses:
+        backend_details += f"   - Function name: `{req[0]}` returned: `{req[2]}`\n"
+
+    return full_response, backend_details
