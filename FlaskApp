@@ -1,0 +1,38 @@
+# Import necessary libraries
+from flask import Flask, request, jsonify
+from google.cloud import bigquery
+from google.cloud import aiplatform
+
+# Initialize BigQuery client and Flask app
+app = Flask(__name__)
+
+client = bigquery.Client()
+
+# Route to handle user queries
+@app.route('/query', methods=['POST'])
+def handle_query():
+    user_query = request.json.get('query')
+
+    # Call BigQuery or Vertex AI functions here
+    # Example: Running a query in BigQuery
+    dataset_id = 'your_dataset_id'
+    table_id = 'your_table_id'
+    
+    # Modify your SQL query as needed based on user_query
+    sql_query = f"SELECT * FROM `{dataset_id}.{table_id}` WHERE condition_here"
+    
+    try:
+        query_job = client.query(sql_query)
+        results = query_job.result()
+
+        response = []
+        for row in results:
+            response.append(dict(row))
+
+        return jsonify({'status': 'success', 'data': response})
+    except Exception as e:
+        return jsonify({'status': 'error', 'message': str(e)})
+
+# Main function to run the app
+if __name__ == '__main__':
+    app.run(host='0.0.0.0', port=8080, debug=True)
