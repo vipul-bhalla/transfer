@@ -1,0 +1,121 @@
+import matplotlib.pyplot as plt
+import seaborn as sns
+import pandas as pd
+import io
+import base64
+
+def generate_dynamic_visualization(data, graph_type, **kwargs):
+    """
+    Generates a visualization based on the given data and graph type.
+    
+    :param data: A list of dictionaries containing the data to plot.
+                 Example: [{'x': 'Jan', 'y': 100}, {'x': 'Feb', 'y': 200}]
+    :param graph_type: Type of graph to generate (e.g., "line", "bar", "pie", "box").
+    :param kwargs: Additional keyword arguments for customization:
+                   - title: Title of the graph
+                   - x_label: Label for the x-axis
+                   - y_label: Label for the y-axis
+                   - hue: For grouped data (e.g., bar plots)
+                   - category: Key for pie chart categories
+                   - value: Key for pie chart values
+    :return: Base64-encoded image string.
+    """
+    # Convert data into a Pandas DataFrame for easier manipulation
+    df = pd.DataFrame(data)
+
+    plt.figure(figsize=(10, 6))
+    graph_type = graph_type.lower()
+
+    # Handle different graph types
+    if graph_type == "line":
+        sns.lineplot(data=df, x="x", y="y", hue=kwargs.get("hue"))
+    elif graph_type == "bar":
+        sns.barplot(data=df, x="x", y="y", hue=kwargs.get("hue"))
+    elif graph_type == "box":
+        sns.boxplot(data=df, x="x", y="y", hue=kwargs.get("hue"))
+    elif graph_type == "pie":
+        if "category" in kwargs and "value" in kwargs:
+            pie_data = df.groupby(kwargs["category"])[kwargs["value"]].sum()
+            plt.pie(
+                pie_data,
+                labels=pie_data.index,
+                autopct="%1.1f%%",
+                startangle=90,
+                colors=sns.color_palette("pastel")
+            )
+        else:
+            raise ValueError("Pie chart requires 'category' and 'value' keys.")
+    else:
+        raise ValueError(f"Unsupported graph type: {graph_type}")
+
+    # Customization
+    plt.title(kwargs.get("title", "Generated Graph"))
+    if graph_type != "pie":  # Pie charts don't use axes
+        plt.xlabel(kwargs.get("x_label", "X-Axis"))
+        plt.ylabel(kwargs.get("y_label", "Y-Axis"))
+
+    # Save the plot to a buffer
+    buf = io.BytesIO()
+    plt.savefig(buf, format="png", bbox_inches="tight")
+    buf.seek(0)
+    encoded_image = base64.b64encode(buf.read()).decode("utf-8")
+    buf.close()
+    plt.close()
+    return encoded_image
+
+
+
+if response.function_call.name == "generate_visualization":
+    graph_data = params.get("data")  # Expecting data to be a list of dicts
+    graph_type = params.get("graph_type", "line")
+    title = params.get("title", "Generated Graph")
+    x_label = params.get("x_label", "X-Axis")
+    y_label = params.get("y_label", "Y-Axis")
+    hue = params.get("hue")  # For grouped data
+    category = params.get("category")  # For pie charts
+    value = params.get("value")  # For pie charts
+
+    try:
+        api_response = generate_dynamic_visualization(
+            data=graph_data,
+            graph_type=graph_type,
+            title=title,
+            x_label=x_label,
+            y_label=y_label,
+            hue=hue,
+            category=category,
+            value=value,
+        )
+    except ValueError as e:
+        api_response = f"Error: {str(e)}"
+
+    api_requests_and_responses.append([response.function_call.name, params, api_response])
+
+
+
+
+You are an AI assistant capable of generating various types of visualizations based on user queries. 
+Supported visualization types include:
+- Line graph
+- Bar chart
+- Pie chart
+- Boxplot
+
+When responding to user queries, determine if a visualization is needed and call the `generate_visualization` function with:
+- `data`: A list of dictionaries containing 'x' and 'y' values for the graph.
+- `graph_type`: The type of graph to generate.
+- Additional parameters like `x_label`, `y_label`, `title`, and `hue`.
+
+Your task is to select the graph type and format based on the user query and provide a meaningful visualization.
+
+
+
+
+
+{
+    "data": [{"x": "January", "y": 500}, {"x": "February", "y": 600}],
+    "graph_type": "bar",
+    "x_label": "Month",
+    "y_label": "Total Transactions",
+    "title": "Monthly Transaction Distribution"
+}
