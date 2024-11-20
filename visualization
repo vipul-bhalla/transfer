@@ -1,0 +1,129 @@
+import matplotlib.pyplot as plt
+import io
+import base64
+from google.cloud import bigquery
+from gemini_api import ChatAPI  # Placeholder for Gemini API
+
+# Visualization function
+def generate_visualization(data, graph_type, x_label, y_label, title):
+    """
+    Generates a visualization based on the given data and parameters.
+    :param data: A list of dictionaries containing the data to plot.
+    :param graph_type: Type of graph to generate (e.g., "line", "bar").
+    :param x_label: Label for the x-axis.
+    :param y_label: Label for the y-axis.
+    :param title: Title of the graph.
+    :return: Base64-encoded image string.
+    """
+    x = [item['x'] for item in data]
+    y = [item['y'] for item in data]
+
+    plt.figure(figsize=(10, 6))
+    if graph_type == "line":
+        plt.plot(x, y, marker="o")
+    elif graph_type == "bar":
+        plt.bar(x, y)
+
+    plt.xlabel(x_label)
+    plt.ylabel(y_label)
+    plt.title(title)
+    plt.grid(True)
+
+    # Save the plot to a buffer
+    buf = io.BytesIO()
+    plt.savefig(buf, format="png")
+    buf.seek(0)
+    encoded_image = base64.b64encode(buf.read()).decode("utf-8")
+    buf.close()
+    plt.close()
+    return encoded_image
+
+# Updated prompt construction
+def handle_user_prompt(prompt, chat):
+    """
+    Handles user prompt and incorporates visualization capabilities.
+    """
+    initial_prompt = f"""
+    You are an AI assistant for banking data analysis with visualization capabilities.
+    In addition to querying data, you can generate visualizations like line graphs and bar charts
+    to represent trends or distributions in the data.
+
+    When responding to user queries, determine if a visualization is needed.
+    If yes, call the `generate_visualization` function with:
+    - `data`: A list of dictionaries containing 'x' and 'y' values for the graph.
+    - `graph_type`: Type of graph (e.g., "line", "bar").
+    - `x_label`: Label for the x-axis.
+    - `y_label`: Label for the y-axis.
+    - `title`: Title of the graph.
+    Your response must include the base64-encoded image returned by the function.
+    """
+
+    response = chat.send_message(initial_prompt + prompt)
+    response = response.candidates[0].content.parts[0]
+
+    api_requests_and_responses = []
+    backend_details = ""
+
+    function_calling_in_process = True
+    while function_calling_in_process:
+        try:
+            params = {}
+            for key, value in response.function_call.args.items():
+                params[key] = value
+
+            if response.function_call.name == "list_datasets":
+                api_response = [BIGQUERY_DATASET_ID]
+                api_requests_and_responses.append([response.function_call.name, params, api_response])
+
+            elif response.function_call.name == "list_tables":
+                dataset_id = f"{BIGQUERY_PROJECT_ID}.{params['dataset_id']}"
+                api_response = client.list_tables(dataset_id)
+                api_response = str([table.table_id for table in api_response])
+                api_requests_and_responses.append([response.function_call.name, params, api_response])
+
+            elif response.function_call.name == "get_table":
+                table_id = f"{BIGQUERY_PROJECT_ID}.{params['table_id']}"
+                api_response = client.get_table(table_id)
+                api_response = api_response.to_api_repr()
+                api_requests_and_responses.append([
+                    response.function_call.name,
+                    params,
+                    [str(api_response.get("description", "")), str([column["name"] for column in api_response["schema"]["fields"]])]
+                ])
+                api_response = str(api_response)
+
+            elif response.function_call.name == "sql_query":
+                job_config = bigquery.QueryJobConfig(maximum_bytes_billed=100000000)
+                cleaned_query = params["query"].replace("\\n", " ").replace("\n", "").replace("\\", "")
+                query_job = client.query(cleaned_query, job_config=job_config)
+                api_response = query_job.result()
+                api_response = str([dict(row) for row in api_response])
+                api_response = api_response.replace("\\", "").replace("\n", "")
+                api_requests_and_responses.append([response.function_call.name, params, api_response])
+
+            elif response.function_call.name == "generate_visualization":
+                graph_data = params.get("data")
+                graph_type = params.get("graph_type", "line")
+                x_label = params.get("x_label", "X-Axis")
+                y_label = params.get("y_label", "Y-Axis")
+                title = params.get("title", "Generated Graph")
+                api_response = generate_visualization(graph_data, graph_type, x_label, y_label, title)
+                api_requests_and_responses.append([response.function_call.name, params, api_response])
+
+            response = chat.send_message(
+                Part.from_function_response(
+                    name=response.function_call.name,
+                    response={"content": api_response},
+                ),
+            )
+            response = response.candidates[0].content.parts[0]
+
+            backend_details += f"- Function call:\n   - Function name: `{api_requests_and_responses[-1][0]}`\n"
+            backend_details += f"   - Function parameters: `{api_requests_and_responses[-1][1]}`\n"
+            backend_details += f"   - API response: `{api_requests_and_responses[-1][2]}`\n\n"
+
+        except AttributeError:
+            function_calling_in_process = False
+
+    full_response = response.text
+    return full_response, backend_details
