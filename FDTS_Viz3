@@ -1,0 +1,84 @@
+def handle_user_prompt(prompt, chat):
+    dataset_id = "gcp_fdts"
+    table_id = f"{BIGQUERY_PROJECT_ID}.{dataset_id}.transactions"
+
+    # Fetch table metadata
+    column_metadata = get_table_metadata_summary(table_id)
+
+    # Construct prompt
+    full_prompt = f"""
+    You are an expert financial analyst with extensive experience in analyzing transaction data for banks.
+    You are interacting with a dataset that tracks banking transactions. The relevant table in the dataset is `transactions`. 
+    Below is a description of the columns in the dataset:
+
+    {column_metadata}
+
+    Please analyze the user's question: "{prompt}"
+
+    Your task is to:
+    - Answer the user's query using the `transactions` table.
+    - If visualization is required, generate an appropriate graph (e.g., line, bar, pie, or boxplot) using the data.
+    - Provide the response or a base64-encoded image if a visualization is generated.
+    """
+
+    # Send prompt to Gemini
+    response = chat.send_message(full_prompt)
+    response = response.candidates[0].content.parts[0]
+
+    api_requests_and_responses = []
+    backend_details = ""
+
+    function_calling_in_process = True
+    final_response = ""
+
+    while function_calling_in_process:
+        try:
+            params = {}
+            for key, value in response.function_call.args.items():
+                params[key] = value
+
+            # Handle different function calls
+            if response.function_call.name == "generate_visualization":
+                graph_data = params.get("data")  # Data for the graph
+                graph_type = params.get("graph_type", "line")
+                title = params.get("title", "Generated Graph")
+                x_label = params.get("x_label", "X-Axis")
+                y_label = params.get("y_label", "Y-Axis")
+                hue = params.get("hue")
+                category = params.get("category")
+                value = params.get("value")
+
+                # Generate the visualization
+                try:
+                    api_response = generate_dynamic_visualization(
+                        data=graph_data,
+                        graph_type=graph_type,
+                        title=title,
+                        x_label=x_label,
+                        y_label=y_label,
+                        hue=hue,
+                        category=category,
+                        value=value,
+                    )
+                    final_response = f'<img src="data:image/png;base64,{api_response}" alt="{title}" />'
+                except ValueError as e:
+                    final_response = f"Error: {str(e)}"
+                
+                function_calling_in_process = False  # Exit after visualization
+
+            else:
+                # Handle other function calls (e.g., list_datasets, list_tables, get_table, sql_query)
+                # Keep logic similar to earlier code
+
+                response = chat.send_message(
+                    Part.from_function_response(
+                        name=response.function_call.name,
+                        response={"content": api_response},
+                    ),
+                )
+                response = response.candidates[0].content.parts[0]
+
+        except AttributeError:
+            function_calling_in_process = False
+
+    return final_response
