@@ -1,0 +1,93 @@
+def generate_visualization(data, graph_type, title="", x_label="", y_label="", hue=None, category=None, value=None):
+    """
+    Generate a graph dynamically based on the given data and graph type.
+    :param data: List of dictionaries containing data points (e.g., [{"x": ..., "y": ...}]).
+    :param graph_type: Type of graph to generate (e.g., "line", "bar", "pie", "box").
+    :param title: Title of the graph.
+    :param x_label: Label for the X-axis.
+    :param y_label: Label for the Y-axis.
+    :param hue: Grouping column for categorical data (optional).
+    :param category: Category column for pie chart (optional).
+    :param value: Value column for pie chart (optional).
+    :return: Base64-encoded image of the generated graph.
+    """
+    import io
+    import matplotlib.pyplot as plt
+    import seaborn as sns
+    import base64
+    import pandas as pd
+
+    # Convert data to a Pandas DataFrame
+    df = pd.DataFrame(data)
+
+    # Set up the figure
+    plt.figure(figsize=(10, 6))
+
+    try:
+        # Generate the appropriate graph based on `graph_type`
+        if graph_type == "line":
+            sns.lineplot(data=df, x="x", y="y")
+        elif graph_type == "bar":
+            sns.barplot(data=df, x="x", y="y")
+        elif graph_type == "pie":
+            if category and value:
+                df.set_index(category).plot.pie(y=value, autopct='%1.1f%%')
+            else:
+                raise ValueError("Category and value columns must be specified for pie chart.")
+        elif graph_type == "box":
+            sns.boxplot(data=df, x="x", y="y")
+        else:
+            raise ValueError(f"Unsupported graph type: {graph_type}")
+
+        # Add labels and title
+        plt.title(title)
+        plt.xlabel(x_label)
+        plt.ylabel(y_label)
+
+        # Save plot to a BytesIO buffer
+        buffer = io.BytesIO()
+        plt.savefig(buffer, format="png")
+        buffer.seek(0)
+
+        # Encode the image to base64
+        base64_image = base64.b64encode(buffer.read()).decode("utf-8")
+        buffer.close()
+
+        return base64_image
+
+    except Exception as e:
+        raise ValueError(f"Error generating visualization: {str(e)}")
+
+    finally:
+        plt.close()
+
+
+
+# Inside the function calling loop of `handle_user_prompt`
+if response.function_call.name == "generate_visualization":
+    graph_data = params.get("data")  # Data for the graph
+    graph_type = params.get("graph_type", "line")
+    title = params.get("title", "Generated Graph")
+    x_label = params.get("x_label", "X-Axis")
+    y_label = params.get("y_label", "Y-Axis")
+    hue = params.get("hue")
+    category = params.get("category")
+    value = params.get("value")
+
+    # Call the centralized visualization function
+    try:
+        api_response = generate_visualization(
+            data=graph_data,
+            graph_type=graph_type,
+            title=title,
+            x_label=x_label,
+            y_label=y_label,
+            hue=hue,
+            category=category,
+            value=value,
+        )
+        final_response = f'<img src="data:image/png;base64,{api_response}" alt="{title}" />'
+    except Exception as e:
+        final_response = f"Error: {str(e)}"
+
+    function_calling_in_process = False  # Stop further processing after visualization
