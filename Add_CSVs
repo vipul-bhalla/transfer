@@ -1,0 +1,43 @@
+import os
+import pandas as pd
+
+def merge_csv_files(input_directory, output_file):
+    """
+    Merges all CSV files in a directory into one CSV file.
+
+    Parameters:
+    - input_directory (str): Path to the directory containing CSV files.
+    - output_file (str): Path to the output CSV file.
+    """
+    # List to hold dataframes
+    dataframes = []
+
+    # Iterate over all files in the directory
+    for file_name in os.listdir(input_directory):
+        # Build full file path
+        file_path = os.path.join(input_directory, file_name)
+
+        # Check if it's a CSV file
+        if file_name.endswith('.csv'):
+            # Read the CSV file and append to the list
+            try:
+                df = pd.read_csv(file_path)
+                dataframes.append(df)
+                print(f"Loaded {file_name}")
+            except Exception as e:
+                print(f"Error loading {file_name}: {e}")
+
+    # Concatenate all dataframes
+    if dataframes:
+        merged_df = pd.concat(dataframes, ignore_index=True)
+        # Save to output file
+        merged_df.to_csv(output_file, index=False)
+        print(f"Merged CSV saved to {output_file}")
+    else:
+        print("No CSV files found in the directory.")
+
+# Specify the directory containing CSV files and the output file
+input_directory = "path/to/your/csv_files"
+output_file = "path/to/merged_output.csv"
+
+merge_csv_files(input_directory, output_file)
