@@ -77,3 +77,14 @@ splitter = CharacterTextSplitter(chunk_size=10, chunk_overlap=2)
 chunks = splitter.split_text(text)
 print(chunks)  # Output: ['LangChain ', 'ain is a ', 'a powerful ', 'werful tool', ...]
 
+##
+
+# Import statements for the specified LangChain-related packages
+from langchain import *  # For core LangChain functionalities
+from langchain_community import *  # For community-supported LangChain modules
+from langchain_core import *  # For core components of LangChain (if separately provided)
+from langchain_google_community import *  # For Google integration modules
+from langchain_google_genai import *  # For Google GenAI-specific functionality
+from langchain_google_vertexai import *  # For Google Vertex AI integrations
+from langchain_openai import *  # For OpenAI integration with LangChain
+from langchain_text_splitters import *  # For text splitting utilities in LangChain
