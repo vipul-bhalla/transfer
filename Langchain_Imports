@@ -1,0 +1,79 @@
+from langchain import PromptTemplate, LLMChain
+from langchain.llms import OpenAI
+
+# Example usage
+template = "What is the capital of {country}?"
+prompt = PromptTemplate(input_variables=["country"], template=template)
+llm = OpenAI(model="text-davinci-003")
+chain = LLMChain(llm=llm, prompt=prompt)
+
+response = chain.run({"country": "France"})
+print(response)  # Output: Paris
+
+##
+
+from langchain_community.tools import WeatherTool
+
+# Example usage
+weather_tool = WeatherTool()
+response = weather_tool.run("What's the weather in New York?")
+print(response)
+
+##
+
+from langchain_core.schema import Document
+
+# Example usage
+doc = Document(page_content="This is a sample document.")
+print(doc.page_content)  # Output: This is a sample document.
+
+##
+
+from langchain_google_community.tools import GoogleSearchTool
+
+# Example usage
+google_search = GoogleSearchTool()
+response = google_search.run("LangChain Python tutorials")
+print(response)
+
+
+##
+
+from langchain_google_genai import GenAI
+from langchain.prompts import PromptTemplate
+
+# Example usage
+genai = GenAI(model="text-bison@001")  # Using Google GenAI's Bison model
+template = PromptTemplate(template="Summarize this article: {text}", input_variables=["text"])
+response = genai.predict(prompt=template.format(text="LangChain is a Python library for..."))
+print(response)
+
+
+##
+
+from langchain_google_vertexai.llms import VertexAI
+
+# Example usage
+vertex_llm = VertexAI(model="text-bison@001")
+response = vertex_llm("What is the future of AI?")
+print(response)
+
+##
+
+from langchain_openai.llms import OpenAI
+
+# Example usage
+llm = OpenAI(api_key="YOUR_API_KEY", model="text-davinci-003")
+response = llm("Explain LangChain in simple terms.")
+print(response)
+
+##
+
+from langchain_text_splitters import CharacterTextSplitter
+
+# Example usage
+text = "LangChain is a powerful tool for building LLM applications."
+splitter = CharacterTextSplitter(chunk_size=10, chunk_overlap=2)
+chunks = splitter.split_text(text)
+print(chunks)  # Output: ['LangChain ', 'ain is a ', 'a powerful ', 'werful tool', ...]
+
