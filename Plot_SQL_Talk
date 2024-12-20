@@ -1,0 +1,156 @@
+import json
+import time
+import io
+import base64
+import matplotlib.pyplot as plt
+from google.cloud import bigquery
+from vertexai.generative_models import FunctionDeclaration, GenerativeModel, Part, Tool
+
+# BigQuery Configuration
+BIGQUERY_PROJECT_ID = "balmy-curve-429612-u2"
+BIGQUERY_DATASET_ID = "gcp_fdts"
+client = bigquery.Client(project=BIGQUERY_PROJECT_ID)
+
+# Plotting Function
+def create_plot(plot_type, data, title="Plot", xlabel="X", ylabel="Y", labels=None):
+    try:
+        plt.figure()
+        if plot_type == 'line':
+            for i, series in enumerate(data):
+                label = labels[i] if labels and i < len(labels) else None
+                plt.plot(series, label=label)
+        elif plot_type == 'scatter':
+            for i, series in enumerate(data):
+                plt.scatter(range(len(series)), series, label=labels[i] if labels and i < len(labels) else None)
+        elif plot_type == 'bar':
+            if len(data) > 1 and labels:
+                width = 0.8 / len(data)
+                x_indices = range(len(data[0]))
+                for i, series in enumerate(data):
+                    plt.bar([x + i * width for x in x_indices], series, width=width, label=labels[i])
+            else:
+                plt.bar(range(len(data[0])), data[0])
+        else:
+            return "Invalid plot type"
+
+        plt.title(title)
+        plt.xlabel(xlabel)
+        plt.ylabel(ylabel)
+        if labels:
+            plt.legend()
+
+        buf = io.BytesIO()
+        plt.savefig(buf, format="png")
+        buf.seek(0)
+        image_base64 = base64.b64encode(buf.getvalue()).decode('utf-8')
+        plt.close()
+        return image_base64
+    except Exception as e:
+        return str(e)
+
+# Function Declarations
+list_datasets_func = FunctionDeclaration(
+    name="list_datasets",
+    description="Get a list of datasets that will help answer the user's question",
+    parameters={"type": "object", "properties": {}}
+)
+
+list_tables_func = FunctionDeclaration(
+    name="list_tables",
+    description="List tables in a dataset that will help answer the user's question",
+    parameters={
+        "type": "object",
+        "properties": {
+            "dataset_id": {"type": "string", "description": "Dataset ID to fetch tables from."}
+        },
+        "required": ["dataset_id"]
+    },
+)
+
+sql_query_func = FunctionDeclaration(
+    name="sql_query",
+    description="Get information from data in BigQuery using SQL queries",
+    parameters={
+        "type": "object",
+        "properties": {
+            "query": {"type": "string", "description": "SQL query to execute."}
+        },
+        "required": ["query"]
+    },
+)
+
+sql_query_tool = Tool(
+    function_declarations=[list_datasets_func, list_tables_func, sql_query_func]
+)
+
+model = GenerativeModel(
+    "gemini-1.5-pro-002",
+    generation_config={"temperature": 1},
+    tools=[sql_query_tool]
+)
+
+chat = model.start_chat(response_validation=False)
+
+def handle_user_prompt(prompt, chat):
+    response = chat.send_message(prompt)
+    response = response.candidates[0].content.parts[0]
+
+    function_calling_in_process = True
+    while function_calling_in_process:
+        try:
+            params = {}
+            for key, value in response.function_call.args.items():
+                params[key] = value
+
+            if response.function_call.name == "sql_query":
+                job_config = bigquery.QueryJobConfig()
+                try:
+                    cleaned_query = params["query"].replace("\n", " ").replace("\\", "")
+                    query_job = client.query(cleaned_query, job_config=job_config)
+                    api_response = query_job.result()
+                    result_data = [dict(row) for row in api_response]
+
+                    # Check if plotting is required
+                    if "plot" in prompt.lower():
+                        numeric_columns = [col for col in result_data[0].keys() if isinstance(result_data[0][col], (int, float))]
+                        if numeric_columns:
+                            data = [[row[col] for row in result_data] for col in numeric_columns]
+                            plot_base64 = create_plot(
+                                plot_type="line", 
+                                data=data, 
+                                title="Query Results", 
+                                xlabel="Index", 
+                                ylabel="Values", 
+                                labels=numeric_columns
+                            )
+                            return f"Graph generated: {plot_base64}"
+                    return f"Query Results: {result_data}"
+                except Exception as e:
+                    return f"Error executing query: {str(e)}"
+
+            response = chat.send_message(
+                Part.from_function_response(
+                    name=response.function_call.name,
+                    response={"content": api_response},
+                )
+            )
+            response = response.candidates[0].content.parts[0]
+        except AttributeError:
+            function_calling_in_process = False
+        except Exception as e:
+            return f"An Error Occurred: {e}"
+
+    return "No response generated."
+
+def interactive_chat():
+    global chat
+    while True:
+        user_prompt = input("Ask your question (or type 'exit' to quit): ")
+        if user_prompt.lower() == 'exit':
+            break
+        response = handle_user_prompt(user_prompt, chat)
+        print("\nResponse:")
+        print(response)
+
+# Run the interactive chat session
+interactive_chat()
