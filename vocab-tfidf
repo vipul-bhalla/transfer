@@ -1,0 +1,46 @@
+from sklearn.feature_extraction.text import TfidfVectorizer
+from sklearn.metrics.pairwise import cosine_similarity
+import numpy as np
+
+def calculate_tfidf_drift(sample1, sample2):
+    """
+    Measure drift between two text samples using TF-IDF and cosine similarity.
+    
+    Args:
+        sample1 (list of str): First test sample (list of text data).
+        sample2 (list of str): Second test sample (list of text data).
+    
+    Returns:
+        float: Cosine similarity between the averaged TF-IDF vectors of the two samples.
+    """
+    # Combine samples to fit the TF-IDF vectorizer
+    combined_samples = sample1 + sample2
+    vectorizer = TfidfVectorizer()
+    tfidf_matrix = vectorizer.fit_transform(combined_samples)
+    
+    # Split the TF-IDF matrix back into two parts
+    tfidf_sample1 = tfidf_matrix[:len(sample1)]
+    tfidf_sample2 = tfidf_matrix[len(sample1):]
+    
+    # Compute the mean TF-IDF vector for each sample
+    mean_vector1 = np.mean(tfidf_sample1.toarray(), axis=0)
+    mean_vector2 = np.mean(tfidf_sample2.toarray(), axis=0)
+    
+    # Compute cosine similarity between the mean vectors
+    similarity = cosine_similarity([mean_vector1], [mean_vector2])[0][0]
+    
+    return similarity
+
+# Example usage
+sample1 = [
+    "The quick brown fox jumps over the lazy dog.",
+    "Text classification is a fundamental NLP task."
+]
+
+sample2 = [
+    "Binary classification involves predicting one of two classes.",
+    "The fox is agile and quick in the forest."
+]
+
+drift_similarity = calculate_tfidf_drift(sample1, sample2)
+print(f"TF-IDF Cosine Similarity: {drift_similarity:.2f}")
