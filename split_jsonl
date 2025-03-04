@@ -1,0 +1,91 @@
+import os
+import json
+import pandas as pd
+
+def split_jsonl_by_document(
+    input_path: str,
+    output_dir: str,
+    chunk_size_mb: int = 10
+):
+    """
+    Reads a large JSONL file into a pandas DataFrame, groups by 'document_id',
+    and writes multiple JSON files per document, each no more than `chunk_size_mb` MB.
+    
+    :param input_path:    Path to the large input .jsonl file
+    :param output_dir:    Directory where output files will be written
+    :param chunk_size_mb: Maximum size (in MB) of each output file
+    """
+    # Convert MB to bytes
+    max_bytes = chunk_size_mb * 1024 * 1024
+    
+    # 1) Read the large JSONL file into a DataFrame
+    print(f"Reading {input_path} into a DataFrame...")
+    df = pd.read_json(input_path, lines=True)
+    print("Reading complete. Total rows:", len(df))
+    
+    # 2) Group by document_id
+    print("Grouping by 'document_id'...")
+    grouped = df.groupby('document_id')
+    
+    # Ensure output directory exists
+    os.makedirs(output_dir, exist_ok=True)
+    
+    # 3) For each document_id, write out data in <= 10 MB chunks
+    for doc_id, group_df in grouped:
+        # Convert the group to a list of dicts
+        records = group_df.to_dict(orient='records')
+        
+        # We'll store lines in a buffer until we hit the chunk size
+        chunk_lines = []
+        current_size = 0
+        chunk_index = 1
+        
+        for record in records:
+            # Convert record to JSON + newline
+            line = json.dumps(record, ensure_ascii=False) + "\n"
+            line_size = len(line.encode('utf-8'))  # size in bytes
+            
+            # If adding this line exceeds max_bytes, flush current buffer
+            if current_size + line_size > max_bytes and chunk_lines:
+                out_filename = os.path.join(
+                    output_dir,
+                    f"doc_{doc_id}_part_{chunk_index}.json"
+                )
+                with open(out_filename, "w", encoding="utf-8") as f_out:
+                    f_out.writelines(chunk_lines)
+                
+                print(f"Created: {out_filename} (size ~ {current_size} bytes)")
+                
+                # Reset for next chunk
+                chunk_lines = []
+                current_size = 0
+                chunk_index += 1
+            
+            # Add this line to the buffer
+            chunk_lines.append(line)
+            current_size += line_size
+        
+        # Write any remaining lines for this doc_id
+        if chunk_lines:
+            out_filename = os.path.join(
+                output_dir,
+                f"doc_{doc_id}_part_{chunk_index}.json"
+            )
+            with open(out_filename, "w", encoding="utf-8") as f_out:
+                f_out.writelines(chunk_lines)
+            
+            print(f"Created: {out_filename} (size ~ {current_size} bytes)")
+
+
+if __name__ == "__main__":
+    # Example usage:
+    INPUT_FILE = "large_input.jsonl"       # 600 MB JSONL
+    OUTPUT_DIR = "split_output"           # Directory for output
+    CHUNK_SIZE_MB = 10                    # Each file <= 10 MB
+
+    split_jsonl_by_document(
+        input_path=INPUT_FILE,
+        output_dir=OUTPUT_DIR,
+        chunk_size_mb=CHUNK_SIZE_MB
+    )
+
