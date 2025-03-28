@@ -1,0 +1,45 @@
+import pandas as pd
+
+def get_files_with_zero_predictions(all_files_df, prediction_df, file_column='file_name', prediction_columns=['model1_pred', 'model2_pred', 'model3_pred']):
+    """
+    Filters files from all_files_df that are present in prediction_df and have all model predictions as 0.
+
+    Args:
+        all_files_df (pd.DataFrame): DataFrame containing all files.
+        prediction_df (pd.DataFrame): DataFrame containing file names and model predictions.
+        file_column (str): Name of the column containing file names in both DataFrames.
+        prediction_columns (list): List of column names containing model predictions.
+
+    Returns:
+        pd.DataFrame: DataFrame containing files from all_files_df with zero predictions.
+    """
+
+    # Merge the dataframes based on the file name column
+    merged_df = pd.merge(all_files_df, prediction_df, on=file_column, how='inner')
+
+    # Filter rows where all prediction columns are 0
+    zero_prediction_df = merged_df[ (merged_df[prediction_columns] == 0).all(axis=1) ]
+
+    # Return only the relevant file information from the original all_files_df
+    result_df = all_files_df[all_files_df[file_column].isin(zero_prediction_df[file_column])]
+
+    return result_df
+
+# Example usage:
+# Create sample DataFrames
+all_files_data = {'file_name': ['file1.txt', 'file2.txt', 'file3.txt', 'file4.txt', 'file5.txt'],
+                 'file_path': ['/path/to/file1.txt', '/path/to/file2.txt', '/path/to/file3.txt', '/path/to/file4.txt', '/path/to/file5.txt'],
+                 'file_size': [1024, 2048, 512, 4096, 8192]}
+all_files_df = pd.DataFrame(all_files_data)
+
+prediction_data = {'file_name': ['file1.txt', 'file2.txt', 'file3.txt', 'file6.txt'],
+                   'model1_pred': [0, 1, 0, 1],
+                   'model2_pred': [0, 0, 0, 0],
+                   'model3_pred': [0, 1, 0, 1]}
+prediction_df = pd.DataFrame(prediction_data)
+
+# Get files with zero predictions
+files_with_zero = get_files_with_zero_predictions(all_files_df, prediction_df)
+
+# Print the result
+print(files_with_zero)
